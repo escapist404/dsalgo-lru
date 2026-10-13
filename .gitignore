@@ -1,0 +1,14 @@
+# Compiled binaries
+lru_demo
+page_demo
+
+# Object files and debug symbols
+*.o
+*.out
+*.dSYM/
+
+# Editor and IDE directories
+.vscode/
+
+# macOS system files
+.DS_Store
