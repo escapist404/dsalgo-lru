@@ -1,0 +1,11 @@
+# Compiled binaries
+lru_demo
+page_demo
+
+# Object files and debug symbols
+*.o
+*.out
+*.dSYM/
+
+# macOS system files
+.DS_Store
