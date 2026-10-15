@@ -13,10 +13,11 @@
 #include "lru_linkedlist.h"
 #include "lru_seqlist.h"
 
-/* 缓存访问操作类型：GET 查询与 PUT 写入 */
+/* 缓存访问操作类型：GET 查询、PUT 写入与 STATE 状态输出 */
 typedef enum {
     OP_GET,
-    OP_PUT
+    OP_PUT,
+    OP_STATE
 } OperationKind;
 
 /* 单条缓存访问指令（用于批量性能基准测试） */
@@ -139,8 +140,9 @@ static int generate_random_sequence(size_t count, size_t key_range,
     return 1;
 }
 
-/* 从文本文件解析访问序列（支持 GET <key> 与 PUT <key> <value>，忽略空行与 # 注释） */
-static int load_sequence(const char* path, Operation** out, size_t* out_length) {
+/* 解析逐行操作；可选首行“容量 操作数”，忽略空行与 # 注释 */
+static int load_sequence(const char* path, Operation** out, size_t* out_length,
+                         size_t* cache_size) {
     FILE* file = fopen(path, "r");
     if (file == NULL) {
         return 0;
@@ -151,29 +153,44 @@ static int load_sequence(const char* path, Operation** out, size_t* out_length) 
     size_t capacity = 0;
     char line[256];
     size_t line_number = 0;
+    size_t expected_length = SIZE_MAX;
     int success = 1;
 
     while (fgets(line, sizeof(line), file) != NULL) {
         ++line_number;
         char command[8] = {0};
-        long long key;
-        long long value;
-        int fields = sscanf(line, "%7s %lld %lld", command, &key, &value);
-        if (fields == EOF || line[0] == '\n' || line[0] == '\r' ||
-            line[0] == '#') {
+        long long key = 0;
+        long long value = 0;
+        char extra;
+        int fields = sscanf(line, "%7s %lld %lld %c", command, &key, &value,
+                            &extra);
+        if (fields == EOF || command[0] == '#') {
             continue;
         }
-        Operation operation;
+        if (length == 0 && expected_length == SIZE_MAX &&
+            sscanf(line, "%lld %lld %c", &key, &value, &extra) == 2 &&
+            key > 0 && (unsigned long long)key <= SIZE_MAX && value >= 0 &&
+            (unsigned long long)value < SIZE_MAX) {
+            *cache_size = (size_t)key;
+            expected_length = (size_t)value;
+            continue;
+        }
+        Operation operation = {0};
         if (strcmp(command, "GET") == 0 && fields == 2 &&
+            sscanf(line, "%7s %lld %c", command, &key, &extra) == 2 &&
             key >= INT_MIN && key <= INT_MAX) {
             operation.kind = OP_GET;
             operation.pair.key = (int)key;
             operation.pair.value = 0;
         } else if (strcmp(command, "PUT") == 0 && fields == 3 &&
+                   key >= INT_MIN && key <= INT_MAX &&
                    value >= INT_MIN && value <= INT_MAX) {
             operation.kind = OP_PUT;
             operation.pair.key = (int)key;
             operation.pair.value = (int)value;
+        } else if (strcmp(command, "STATE") == 0 && fields == 1 &&
+                   sscanf(line, "%7s %c", command, &extra) == 1) {
+            operation.kind = OP_STATE;
         } else {
             fprintf(stderr, "invalid operation at %s:%zu\n", path, line_number);
             success = 0;
@@ -183,6 +200,10 @@ static int load_sequence(const char* path, Operation** out, size_t* out_length) 
             success = 0;
             break;
         }
+    }
+    if (ferror(file) || *cache_size == 0 ||
+        (expected_length != SIZE_MAX && length != expected_length)) {
+        success = 0;
     }
     fclose(file);
 
@@ -224,7 +245,7 @@ static int benchmark_sequence(const Operation* operations, size_t length,
         if (operations[i].kind == OP_GET) {
             PairElemType key = operations[i].pair.key;
             lru_seqlist_get(array, &key, NULL);
-        } else {
+        } else if (operations[i].kind == OP_PUT) {
             lru_seqlist_put(array, (PairType*)&operations[i].pair);
         }
     }
@@ -239,7 +260,7 @@ static int benchmark_sequence(const Operation* operations, size_t length,
         if (operations[i].kind == OP_GET) {
             PairElemType key = operations[i].pair.key;
             lru_linkedlist_get(linked, &key, NULL);
-        } else {
+        } else if (operations[i].kind == OP_PUT) {
             lru_linkedlist_put(linked, (PairType*)&operations[i].pair);
         }
     }
@@ -254,7 +275,7 @@ static int benchmark_sequence(const Operation* operations, size_t length,
         if (operations[i].kind == OP_GET) {
             PairElemType key = operations[i].pair.key;
             lru_hashlist_get(hash, &key, NULL);
-        } else {
+        } else if (operations[i].kind == OP_PUT) {
             lru_hashlist_put(hash, (PairType*)&operations[i].pair);
         }
     }
@@ -350,22 +371,82 @@ static void benchmark_random(size_t cache_size) {
     free(operations);
 }
 
-static void benchmark_file(size_t cache_size) {
+/* 文件测试使用独立空缓存，仅输出 GET、STATE 结果与末尾统计 */
+static int run_file(const char* path, size_t cache_size, int active) {
+    Operation* operations = NULL;
+    size_t length = 0;
+    if (!load_sequence(path, &operations, &length, &cache_size)) {
+        fputs("读取访问序列失败\n", stderr);
+        return 1;
+    }
+
+    LRUSeqList* array = NULL;
+    LRULinkedList* linked = NULL;
+    LRUHashList* hash = NULL;
+    int initialized = active == 1 ? lru_seqlist_init(&array, cache_size)
+                                 : active == 2
+                                       ? lru_linkedlist_init(&linked, cache_size)
+                                       : lru_hashlist_init(&hash, cache_size);
+    if (!initialized) {
+        free(operations);
+        fputs("初始化失败\n", stderr);
+        return 1;
+    }
+
+    int status = 0;
+    for (size_t i = 0; i < length; ++i) {
+        Operation* operation = &operations[i];
+        if (operation->kind == OP_GET) {
+            int value = -1;
+            if (active == 1) {
+                lru_seqlist_get(array, &operation->pair.key, &value);
+            } else if (active == 2) {
+                lru_linkedlist_get(linked, &operation->pair.key, &value);
+            } else {
+                lru_hashlist_get(hash, &operation->pair.key, &value);
+            }
+            printf("%d\n", value);
+        } else if (operation->kind == OP_PUT) {
+            int inserted = active == 1 ? lru_seqlist_put(array, &operation->pair)
+                                      : active == 2
+                                            ? lru_linkedlist_put(linked, &operation->pair)
+                                            : lru_hashlist_put(hash, &operation->pair);
+            if (!inserted) {
+                fputs("PUT 失败\n", stderr);
+                status = 1;
+                break;
+            }
+        } else if (active == 1) {
+            lru_seqlist_state(array);
+        } else if (active == 2) {
+            lru_linkedlist_state(linked);
+        } else {
+            lru_hashlist_state(hash);
+        }
+    }
+    if (active == 1) {
+        lru_seqlist_stats(array);
+    } else if (active == 2) {
+        lru_linkedlist_stats(linked);
+    } else {
+        lru_hashlist_stats(hash);
+    }
+    lru_seqlist_destroy(array);
+    lru_linkedlist_destroy(linked);
+    lru_hashlist_destroy(hash);
+    free(operations);
+    return status;
+}
+
+static void test_file(size_t cache_size, int active) {
     char path[256];
     int result = prompt_path("访问序列文件: ", path, sizeof(path));
     if (result != 1) {
         puts(result < 0 ? "输入结束" : "文件名不能为空");
         return;
     }
-
-    Operation* operations = NULL;
-    size_t length = 0;
-    if (!load_sequence(path, &operations, &length)) {
-        puts("读取访问序列失败");
-        return;
-    }
-    run_benchmark(operations, length, cache_size);
-    free(operations);
+    putchar('\n');
+    run_file(path, cache_size, active);
 }
 
 /* 打印当前选中的 LRU 方案缓存状态 */
@@ -381,7 +462,20 @@ static void print_active_state(int active, const LRUSeqList* array,
     }
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+    if (argc != 1) {
+        int active = 1;
+        if ((argc != 3 && argc != 4) || strcmp(argv[1], "--file") != 0 ||
+            (argc == 4 && strcmp(argv[3], "1") != 0 &&
+             strcmp(argv[3], "2") != 0 && strcmp(argv[3], "3") != 0)) {
+            fputs("用法: lru_demo --file <文件> [1|2|3]\n", stderr);
+            return 1;
+        }
+        if (argc == 4) {
+            active = argv[3][0] - '0';
+        }
+        return run_file(argv[2], 0, active);
+    }
     size_t cache_size;
     int result;
     do {
@@ -420,7 +514,7 @@ int main(void) {
         puts("3. PUT");
         puts("4. 打印当前缓存");
         puts("5. 随机访问序列性能比较");
-        puts("6. 文件访问序列性能比较");
+        puts("6. 文件访问序列测试");
         puts("7. 切换操作后打印");
         puts("0. 退出");
         fputs("选择: ", stdout);
@@ -489,7 +583,7 @@ int main(void) {
         } else if (choice == 5) {
             benchmark_random(cache_size);
         } else if (choice == 6) {
-            benchmark_file(cache_size);
+            test_file(cache_size, active);
         } else if (choice == 7) {
             print_after = !print_after;
         } else {

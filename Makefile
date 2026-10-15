@@ -17,7 +17,7 @@ LRU_HEADERS = lru/pair.h lru/lru_seqlist.h lru/lru_linkedlist.h \
 PAGE_SOURCES = pr/page_replacement.c pr/page_replacement_demo.c
 PAGE_HEADERS = pr/page_replacement.h
 
-.PHONY: all clean
+.PHONY: all clean test
 
 all: lru_demo page_demo
 
@@ -26,6 +26,9 @@ lru_demo: $(LRU_SOURCES) $(DS_SOURCES) $(LRU_HEADERS) $(DS_HEADERS)
 
 page_demo: $(PAGE_SOURCES) $(PAGE_HEADERS)
 	$(CC) $(CFLAGS) $(INCLUDES) $(PAGE_SOURCES) -o $@
+
+test: lru_demo
+	python3 tests/test_file_sequence.py
 
 clean:
 	rm -f lru_demo page_demo

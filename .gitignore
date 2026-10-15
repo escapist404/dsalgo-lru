@@ -12,3 +12,6 @@ page_demo
 
 # macOS system files
 .DS_Store
+
+# data
+data/

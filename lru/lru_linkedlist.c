@@ -97,6 +97,10 @@ int lru_linkedlist_state(const LRULinkedList* list) {
     if (list == NULL || list->cache == NULL) {
         return 0;
     }
+    if (linkedlist_empty(list->cache)) {
+        puts("EMPTY");
+        return 1;
+    }
     printf("STATE");
     for (LinkedListNode* node =
              linkedlist_next(linkedlist_head(list->cache));
@@ -104,9 +108,6 @@ int lru_linkedlist_state(const LRULinkedList* list) {
         const PairType* pair =
             (const PairType*)linkedlist_value_const(node);
         printf(" %d:%d", pair->key, pair->value);
-    }
-    if (linkedlist_empty(list->cache)) {
-        printf(" EMPTY");
     }
     puts("");
     return 1;
@@ -119,7 +120,7 @@ int lru_linkedlist_stats(const LRULinkedList* list) {
     double hit_rate = list->access_count == 0
                           ? 0.0
                           : (double)list->hit_count / list->access_count;
-    printf("STATS hits=%zu misses=%zu replacements=%zu hit_rate=%.6f\n",
+    printf("STATS %zu %zu %zu %.6f\n",
            list->hit_count, list->missed_count, list->replacement_count,
            hit_rate);
     return 1;

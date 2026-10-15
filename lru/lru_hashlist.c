@@ -110,15 +110,16 @@ int lru_hashlist_state(const LRUHashList* list) {
     if (list == NULL || list->cache == NULL) {
         return 0;
     }
+    if (bilinkedlist_empty(list->cache)) {
+        puts("EMPTY");
+        return 1;
+    }
     printf("STATE");
     for (BiLinkedListNode* node = bilinkedlist_front(list->cache);
          node != NULL; node = bilinkedlist_next(list->cache, node)) {
         const PairType* pair =
             (const PairType*)bilinkedlist_value_const(node);
         printf(" %d:%d", pair->key, pair->value);
-    }
-    if (bilinkedlist_empty(list->cache)) {
-        printf(" EMPTY");
     }
     puts("");
     return 1;
@@ -131,7 +132,7 @@ int lru_hashlist_stats(const LRUHashList* list) {
     double hit_rate = list->access_count == 0
                           ? 0.0
                           : (double)list->hit_count / list->access_count;
-    printf("STATS hits=%zu misses=%zu replacements=%zu hit_rate=%.6f\n",
+    printf("STATS %zu %zu %zu %.6f\n",
            list->hit_count, list->missed_count, list->replacement_count,
            hit_rate);
     return 1;

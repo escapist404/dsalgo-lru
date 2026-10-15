@@ -103,13 +103,14 @@ int lru_seqlist_state(const LRUSeqList* list) {
     if (list == NULL || list->cache == NULL) {
         return 0;
     }
+    if (seqlist_empty(list->cache)) {
+        puts("EMPTY");
+        return 1;
+    }
     printf("STATE");
     for (size_t i = 0; i < seqlist_length(list->cache); ++i) {
         const PairType* pair = (const PairType*)seqlist_at_const(list->cache, i);
         printf(" %d:%d", pair->key, pair->value);
-    }
-    if (seqlist_empty(list->cache)) {
-        printf(" EMPTY");
     }
     puts("");
     return 1;
@@ -122,7 +123,7 @@ int lru_seqlist_stats(const LRUSeqList* list) {
     double hit_rate = list->access_count == 0
                           ? 0.0
                           : (double)list->hit_count / list->access_count;
-    printf("STATS hits=%zu misses=%zu replacements=%zu hit_rate=%.6f\n",
+    printf("STATS %zu %zu %zu %.6f\n",
            list->hit_count, list->missed_count, list->replacement_count,
            hit_rate);
     return 1;
